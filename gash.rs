@@ -15,20 +15,28 @@ use std::{io, run, os};
 use std::io::buffered::BufferedReader;
 use std::io::stdin;
 use extra::getopts;
+use std::vec::OwnedVector;
+//use std::{str};
+//use std::path::GenericPath;
+use std::path::posix::Path;
+
 
 struct Shell {
     cmd_prompt: ~str,
+	cwd: Path
 }
 
 impl Shell {
     fn new(prompt_str: &str) -> Shell {
         Shell {
             cmd_prompt: prompt_str.to_owned(),
+            cwd:        os::getcwd()
         }
     }
     
     fn run(&mut self) {
         let mut stdin = BufferedReader::new(stdin());
+        let mut history: ~[~str] = ~[];
         
         loop {
             print(self.cmd_prompt);
@@ -40,9 +48,33 @@ impl Shell {
             
             match program {
                 ""      =>  { continue; }
+                "history"   =>  { for i in range(0, history.len()) {
+                                     println! ("{}: {}", i+1, history[i]);
+                                    }
+                                }
                 "exit"  =>  { return; }
+                "help"      =>  { println!("Why you askin' me?");}
+                "cd"        =>  { self.run_cd(cmd_line)}
                 _       =>  { self.run_cmdline(cmd_line); }
             }
+
+            history.push(cmd_line.to_owned());
+        }
+    }
+
+    /* Works for basic cases except when folder/file names have spaces
+        e.g cd ../"Spring 2014"/"CS 4414" */
+    fn run_cd(&mut self, cmd_line: &str){
+        let argv: ~[~str] =
+            cmd_line.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
+
+        if argv.len() > 1 {
+            let path_str: ~str = argv[1];
+	    match from_str::<Path>(path_str) {
+		    Some(new_path) => {self.cwd.push(new_path);}
+		    None => {println("failed to read path");}
+	    }
+	    if(!os::change_dir(&self.cwd)) {println("failed to change directory");}
         }
     }
     
@@ -51,14 +83,29 @@ impl Shell {
             cmd_line.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
     
         if argv.len() > 0 {
-            let program: ~str = argv.remove(0);
-            self.run_cmd(program, argv);
+		let program: ~str = argv.remove(0);
+            	self.run_cmd(program, argv);
         }
     }
     
     fn run_cmd(&mut self, program: &str, argv: &[~str]) {
-        if self.cmd_exists(program) {
-            run::process_status(program, argv);
+        if self.cmd_exists(program) {    
+	      let argv_length = argv.len();
+	      if (argv_length > 0) {
+	    	match argv[argv_length - 1] {
+		    ~"&" => {
+			    //let (port, chan) : (Port<int>, Chan<int>) = Chan::new();
+	    		let mut mut_argv = argv.clone().to_owned();
+			    mut_argv.pop();
+			    let temp_program = program.clone().to_owned();
+	    		let immut_argv = mut_argv.clone().to_owned();
+			    spawn(proc() {
+				    run::process_status(temp_program, immut_argv);
+			    }); 
+		      }
+            _ => {run::process_status(program, argv);}
+		    }
+	      } else {run::process_status(program, argv);}
         } else {
             println!("{:s}: command not found", program);
         }
