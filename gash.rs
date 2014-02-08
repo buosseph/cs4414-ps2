@@ -16,6 +16,10 @@ use std::io::buffered::BufferedReader;
 use std::io::stdin;
 use extra::getopts;
 use std::vec::OwnedVector;
+use std::path::posix::Path;
+use std::run::Process;
+use std::run::ProcessOptions;
+
 
 struct Shell {
     cmd_prompt: ~str,
@@ -35,52 +39,28 @@ impl Shell {
         let mut history: ~[~str] = ~[];
         
         loop {
-            print!("{} {}", self.cwd.filename_display() ,self.cmd_prompt);
+            print!("[{}] {}", self.cwd.filename_display() ,self.cmd_prompt);
             io::stdio::flush();
             
             let line = stdin.read_line().unwrap();
             let cmd_line = line.trim().to_owned();
             let program = cmd_line.splitn(' ', 1).nth(0).expect("no program");
-
-            // Internal commands here 
+            
             match program {
-                ""          =>  { continue; }
+                ""      =>  { continue; }
                 "history"   =>  { for i in range(0, history.len()) {
                                      println! ("{}: {}", i+1, history[i]);
                                     }
                                 }
+                "exit"  =>  { return; }
                 "help"      =>  { println!("Why you askin' me?");}
                 "cd"        =>  { self.run_cd(cmd_line)}
-                "exit"      =>  { return; }
-                _           =>  { self.run_cmdline(cmd_line); } // External commands match here
+                _       =>  { self.run_cmdline(cmd_line); }
             }
 
             history.push(cmd_line.to_owned());
         }
     }
-
-    
-    fn run_cmdline(&mut self, cmd_line: &str) {
-        let mut argv: ~[~str] =
-            cmd_line.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
-        
-        if argv.len() > 0 {
-            let program: ~str = argv.remove(0);
-            self.run_cmd(program, argv);
-        }
-    }
-
-    fn run_cmd(&mut self, program: &str, argv: &[~str]) {
-        if self.cmd_exists(program) {
-            println!("Running: {}", program);
-            run::process_status(program, argv);
-
-        } else {
-            println!("{:s}: command not found", program);
-        }
-    }
-
-
 
     /* Works for basic cases except when folder/file names have spaces
         e.g cd ../"Spring 2014"/"CS 4414" */
@@ -90,17 +70,51 @@ impl Shell {
 
         if argv.len() > 1 {
             let path_str: ~str = argv[1];
-            let path_dirs: ~[&str] = path_str.split_str("/").collect();
-            for i in range(0, path_dirs.len()) {
-                if (path_dirs[i]=="..") {
-                    self.cwd.pop();
-                }
-                else {
-                    self.cwd.push(path_dirs[i]);
-                }
+            let path = Path::new(path_str);
+            if os::change_dir(&path) {
+                self.cwd.push(path);
             }
         }
-
+    }
+    
+    fn run_cmdline(&mut self, cmd_line: &str) {
+        let mut argv: ~[~str] =
+            cmd_line.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
+    
+        if argv.len() > 0 {
+        let program: ~str = argv.remove(0);
+                self.run_cmd(program, argv);
+        }
+    }
+    
+    fn run_cmd(&mut self, program: &str, argv: &[~str]) {
+        if self.cmd_exists(program) {    
+            let argv_length = argv.len();
+            if (argv_length > 0) {
+                match argv[argv_length - 1] {
+                    ~"&" => {
+                        let process = Process::new(program, argv, ProcessOptions {
+                                    env: None,
+                                    dir: None,
+                                    in_fd: Some(1),
+                                    out_fd: Some(2),
+                                    err_fd: Some(3)
+                                });
+                                spawn(proc () {
+                                    match process {
+                                        Some(mut process) => {process.finish();}
+                                        _       => {}
+                                    }
+                                });
+                      }
+                    _ => {run::process_status(program, argv);}
+                }
+            } else {
+                run::process_status(program, argv);
+            }
+        } else {
+            println!("{:s}: command not found", program);
+        }
     }
     
     fn cmd_exists(&mut self, cmd_path: &str) -> bool {
