@@ -19,7 +19,7 @@ use std::vec::OwnedVector;
 use std::path::posix::Path;
 use std::run::Process;
 use std::run::ProcessOptions;
-
+// use std::io::signal::{Listener, Interrupt};
 
 struct Shell {
     cmd_prompt: ~str,
@@ -37,6 +37,10 @@ impl Shell {
     fn run(&mut self) {
         let mut stdin = BufferedReader::new(stdin());
         let mut history: ~[~str] = ~[];
+
+        // Will catch signal but breaks external command functionality; find a different solution
+        // let mut listener = Listener::new();
+        // listener.register(Interrupt);
         
         loop {
             print!("[{}] {}", self.cwd.filename_display() ,self.cmd_prompt);
