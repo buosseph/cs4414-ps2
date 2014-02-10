@@ -243,11 +243,6 @@ impl Shell {
         else {
             let path = &Path::new(read_from_file.clone());
 
-            println!("Prog1: {}", program );
-            for i in range(0, argv.len()){
-                print!("\t{}", argv[i]);
-            }
-
             if !path.is_file() {
                 println!("There doesn't seem to be any file called {}", read_from_file);
             }
