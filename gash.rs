@@ -264,8 +264,8 @@ impl Shell {
                 }) {
                     Some(mut p) => {
                         {
-                            let mut process = &mut p;
-                            let mut wtr = process.input();
+                            let process = &mut p;
+                            let wtr = process.input();
 
                             // Read input file
                             wtr.write(input);
@@ -283,19 +283,6 @@ impl Shell {
 
 
     fn pipe(&mut self, prog1: &str, prog1_args: &[~str], prog2: &str, prog2_args: &[~str]){
-        let mut output: ~str = ~"";
-
-        println!("Prog1: {}", prog1 );
-        for i in range(0, prog1_args.len()){
-            print!("\t{}", prog1_args[i]);
-        }
-        println!("\n");
-
-        println!("Prog2: {}", prog2 );
-        for i in range(0, prog2_args.len()){
-            print!("\t{}", prog2_args[i]);
-        }
-        println!("\n");
 
         let process1 = Process::new(prog1, prog1_args, ProcessOptions{
             env: None,
@@ -310,7 +297,7 @@ impl Shell {
                 Some(mut p1)    => {
                     {
                         let process1 = &mut p1;
-                        let mut output = process1.output().read_to_str();
+                        let output = process1.output().read_to_str();
                         chan1.send(output);
                     }
                     p1.close_input();
