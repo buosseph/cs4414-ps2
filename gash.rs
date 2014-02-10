@@ -13,17 +13,14 @@ extern mod extra;
 
 use std::{io, run, os};
 use std::io::buffered::BufferedReader;
-use std::io::stdin;
+use std::io::{stdin, File};
 use extra::getopts;
-use std::vec::OwnedVector;
-//use std::{str};
-//use std::path::GenericPath;
-use std::path::posix::Path;
-
+use std::run::{Process, ProcessOptions};
+use std::io::signal::{Listener, Interrupt};
 
 struct Shell {
     cmd_prompt: ~str,
-	cwd: Path
+    cwd: Path
 }
 
 impl Shell {
@@ -39,9 +36,14 @@ impl Shell {
         let mut history: ~[~str] = ~[];
         
         loop {
-            print(self.cmd_prompt);
+            print!("[{}] {}", self.cwd.filename_display() ,self.cmd_prompt);
             io::stdio::flush();
-            
+
+            // Catches interrupt signal to prevent closing gash,
+            // placing the listener outside of the loop broke the external command functionality
+            let mut listener = Listener::new();
+            listener.register(Interrupt);
+
             let line = stdin.read_line().unwrap();
             let cmd_line = line.trim().to_owned();
             let program = cmd_line.splitn(' ', 1).nth(0).expect("no program");
@@ -62,6 +64,7 @@ impl Shell {
         }
     }
 
+
     /* Works for basic cases except when folder/file names have spaces
         e.g cd ../"Spring 2014"/"CS 4414" */
     fn run_cd(&mut self, cmd_line: &str){
@@ -70,51 +73,401 @@ impl Shell {
 
         if argv.len() > 1 {
             let path_str: ~str = argv[1];
-	    match from_str::<Path>(path_str) {
-		    Some(new_path) => {self.cwd.push(new_path);}
-		    None => {println("failed to read path");}
-	    }
-	    if(!os::change_dir(&self.cwd)) {println("failed to change directory");}
+            let path = Path::new(path_str);
+            if os::change_dir(&path) {
+                self.cwd.push(path);
+            }
         }
     }
     
+
     fn run_cmdline(&mut self, cmd_line: &str) {
         let mut argv: ~[~str] =
             cmd_line.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
     
         if argv.len() > 0 {
-		let program: ~str = argv.remove(0);
-            	self.run_cmd(program, argv);
+        let program: ~str = argv.remove(0);
+                self.run_cmd(program, argv);
         }
     }
     
+
     fn run_cmd(&mut self, program: &str, argv: &[~str]) {
-        if self.cmd_exists(program) {    
-	      let argv_length = argv.len();
-	      if (argv_length > 0) {
-	    	match argv[argv_length - 1] {
-		    ~"&" => {
-			    //let (port, chan) : (Port<int>, Chan<int>) = Chan::new();
-	    		let mut mut_argv = argv.clone().to_owned();
-			    mut_argv.pop();
-			    let temp_program = program.clone().to_owned();
-	    		let immut_argv = mut_argv.clone().to_owned();
-			    spawn(proc() {
-				    run::process_status(temp_program, immut_argv);
-			    }); 
-		      }
-            _ => {run::process_status(program, argv);}
-		    }
-	      } else {run::process_status(program, argv);}
+        if self.cmd_exists(program) {
+            // 1. Check for &
+            if argv.contains(&~"&") {
+                let background = true;
+                let argv_bkgd = argv.slice(0, argv.len());
+
+                //2. Check for pipe later...
+
+                // 3. Check for redirect
+                if argv_bkgd.contains(&~">"){
+                    for i in range(0, argv_bkgd.len()){
+                        if argv_bkgd[i] == ~">" {
+                            self.redirect_right(program, argv_bkgd.slice(0, i), argv_bkgd[i+1], background);
+                            break;
+                        }
+                    }
+                }
+                else if argv_bkgd.contains(&~"<"){
+                    for i in range(0, argv_bkgd.len()){
+                        if argv_bkgd[i] == ~"<" {
+                            self.redirect_left(program, argv_bkgd.slice(0, i), argv_bkgd[i+1], background);
+                            break;
+                        }
+                    }
+                }
+                else {
+                    // No pipe or redirect
+                    let process = Process::new(program, argv_bkgd, ProcessOptions::new());
+                    spawn(proc () {
+                        match process {
+                            Some(mut process) => {
+                                //println!("\tRunning process in the background" );
+                                process.finish();
+                            },
+                            None       => { }
+                        }
+                    });
+                }
+
+            } else {
+                let background = false;
+
+                // 3. Check for redirect
+                if argv.contains(&~">"){
+                    for i in range(0, argv.len()){
+                        if argv[i] == ~">" {
+                            self.redirect_right(program, argv.slice(0, i), argv[i+1], background);
+                            break;
+                        }
+                    }
+                }
+                else if argv.contains(&~"<"){
+                    for i in range(0, argv.len()){
+                        if argv[i] == ~"<" {
+                            self.redirect_left(program, argv.slice(0, i), argv[i+1], background);
+                            break;
+                        }
+                    }
+                }
+                else if argv.contains(&~"|"){
+                    // add program to front of argv
+                    let mut args = argv.to_owned();
+                    args.insert(0, program.to_owned());
+                    self.check_for_pipes(args);
+                }
+                else {
+                    // No pipe or redirect
+                    run::process_status(program, argv);
+                }
+                
+            }
+
         } else {
             println!("{:s}: command not found", program);
         }
+
+
+        /*
+        // 1. Check for &
+        if argv.contains(&~"&") {
+            let background = true;
+            let mut line = argv.slice(0, argv.len()-1);
+
+
+            // 2. Check for pipe(s)
+            // 3. Check for redirect
+            for i in range(0, line.len()) {
+                if line[i] == ~">" {
+                    // 4. Check if prog exists 
+                    if self.cmd_exists(program){
+                        self.redirect_right(program, line.slice(0, i), line[i+1], background);
+                        break;
+                    } else {
+                        println!("{:s}: command not found", program);
+                        break;
+                    }
+                } else if line[i] == ~"<" {
+
+                } else {
+                    run::process_status(program, line);
+                }
+
+            }
+
+
+        } else { // 2. Check for pipe(s)
+            // 3. Check for redirect
+            // 4. Check if prog exists
+
+        }*/
+
+
+        /*
+        if self.cmd_exists(program) {
+
+            // Redirects are processed from left to right
+            if argv.contains(&~">") {
+                println!("Found right redirect");
+                for i in range(0, argv.len()) {
+                    if argv[i] == ~">" {
+                        self.redirect_right(program, argv.slice(0, i), argv[i+1]);
+                    }
+                }
+            }
+
+            else if argv.contains(&~"<") {
+                println!("Found left redirect");
+                for i in range(0, argv.len()) {
+                    if argv[i] == ~"<" {
+                        self.redirect_left(program, argv.slice(0,i), argv[i+1]);
+                    }
+                }
+            }
+
+            else if argv.contains(&~"|") {
+                println!("Found pipe");
+                for i in range(0, argv.len()) {
+                    if argv[i] == ~"|" {
+                        self.pipe(program, argv.slice(0, i), argv[i+1], argv.slice(i+2, argv.len()));
+                    }
+                }
+            }
+
+            else if argv.contains(&~"&") {
+                // for i in range(0, argv.len()){
+                //     if argv[i] = ~"&" {
+                //         argv.remove(i);
+                //     }
+                // }
+                let process = Process::new(program, argv, ProcessOptions {
+                    env: None,
+                    dir: None,
+                    in_fd: Some(0),
+                    out_fd: Some(1),
+                    err_fd: Some(2)
+                });
+                spawn(proc () {
+                    match process {
+                        Some(mut process) => {
+                            //println!("\tRunning process in the background" );
+                            process.finish();
+                        }
+                        None       => { }
+                    }
+                });
+            } else {
+                run::process_status(program, argv);
+            }
+        } 
+        else {
+            println!("{:s}: command not found", program);
+        }*/
+        
+
     }
     
+
     fn cmd_exists(&mut self, cmd_path: &str) -> bool {
         let ret = run::process_output("which", [cmd_path.to_owned()]);
         return ret.expect("exit code error.").status.success();
     }
+
+    fn check_for_pipes(&mut self, cmd_argv: &[~str]){
+        for i in range(0, cmd_argv.len()){
+            if cmd_argv[i] == ~"|" {
+                self.pipe(cmd_argv[0], cmd_argv.slice(1, i), cmd_argv[i+1], cmd_argv.slice(i+2, cmd_argv.len()));
+            }
+        }      
+    }
+
+    // Functional, but not correctly
+    fn redirect_right(&mut self, program: &str, argv: &[~str], write_to_file: &str, background: bool){
+        
+
+        if background {
+            let path = &Path::new(write_to_file.clone());
+            let mut output_file = File::create(path).unwrap();
+            println!("Created output file {}", write_to_file);   
+            let process = Process::new(program, argv, ProcessOptions::new());
+
+            let (port, chan): (Port<~str>, Chan<~str>) = Chan::new();
+
+            spawn(proc() {
+                match process {
+                    Some(mut p)     => {
+                        {
+                            let process = &mut p;
+                            let reader = process.output();
+                            let output = reader.read_to_str();  //~str
+                            
+
+                            // Write to output file
+                            chan.send(output);
+                        }
+                        p.close_input();
+                        p.close_outputs();
+                        p.finish();
+                    },
+                    None            => {println!("Redirect error!");}
+                }
+            });
+            let output = port.recv();
+            output_file.write_str(output);
+        } else {
+            let path = &Path::new(write_to_file.clone());
+            let mut output_file = File::create(path).unwrap();
+            println!("Created output file {}", write_to_file);   
+
+            // Works now, but requires interrupt signal to 
+            // be sent twice to return to gash
+            match Process::new(program, argv, ProcessOptions::new()) {
+                Some(mut p) => {
+                    {
+                        let process = &mut p;
+                        let rdr = process.output();
+                        let out = rdr.read_to_str();
+
+                        // Write to output file
+                        output_file.write_str(out);
+                    }
+                    p.close_input();
+                    p.close_outputs();
+                    p.finish();
+                },
+                None => {println!("Redirect error!");}
+            }
+        }
+    }
+
+
+    // Tested with cat command
+    // Works, but prints that there's not directory/file for cat and <
+    // Try to fix that later 
+    fn redirect_left(&mut self, program: &str, argv: &[~str], read_from_file: &str, background: bool){
+        if background {
+
+        }
+        else {
+            let path = &Path::new(read_from_file.clone());
+
+            println!("Prog1: {}", program );
+            for i in range(0, argv.len()){
+                print!("\t{}", argv[i]);
+            }
+
+            if !path.is_file() {
+                println!("There doesn't seem to be any file called {}", read_from_file);
+            }
+            else {
+                let mut input_file = File::open(path);
+                let input = input_file.read_to_end();
+                println!("Starting process");
+                match Process::new(program, argv, ProcessOptions{
+                    env: None,
+                    dir: None,
+                    in_fd: None,
+                    out_fd: Some(1),
+                    err_fd: Some(2)
+                }) {
+                    Some(mut p) => {
+                        {
+                            let mut process = &mut p;
+                            let mut wtr = process.input();
+
+                            // Read input file
+                            wtr.write(input);
+                        }
+                        p.close_input();
+                        p.close_outputs();
+                        p.finish();
+                    },
+                    None => {println!("Redirect error!");}
+                }
+            }
+        }
+            
+    }
+
+
+    fn pipe(&mut self, prog1: &str, prog1_args: &[~str], prog2: &str, prog2_args: &[~str]){
+        //let mut output: ~str = ~"";
+
+        println!("Prog1: {}", prog1 );
+        for i in range(0, prog1_args.len()){
+            print!("\t{}", prog1_args[i]);
+        }
+        println!("\n");
+
+        println!("Prog2: {}", prog2 );
+        for i in range(0, prog2_args.len()){
+            print!("\t{}", prog2_args[i]);
+        }
+        println!("\n");
+
+	 let (port, chan): (Port<~str>, Chan<~str>) = Chan::new();
+
+	//spawn(proc() {
+        match Process::new(prog2, prog2_args, ProcessOptions{
+            env: None,
+            dir: None,
+            in_fd: Some(0),
+            out_fd: None,
+            err_fd: Some(2)
+        }){
+            Some(mut p2)    => {
+		let process = Process::new(prog1, prog1_args, ProcessOptions{
+                    	env: None,
+                   	dir: None,
+                  	in_fd: None,
+                    	out_fd: Some(1),
+                    	err_fd: Some(2)
+                	});
+
+		spawn(proc() {
+                match process{
+                    Some(mut p1)    => {
+                        {
+                            let process1 = &mut p1;
+                            let output = process1.output().read_to_str();
+                            //let process = &mut p;
+                            //let reader = process.output();
+                            //let output = reader.read_to_str();  //~str
+                            
+                            // Write to output file
+                            chan.send(output);
+                        }
+                        p1.close_input();
+                        p1.close_outputs();
+                        p1.finish();
+                    },
+                    None            => { ; }  //println!("Something went wrong with {}", prog1);}
+                }
+		});
+
+            	let output = port.recv();
+
+                {
+                    let process2 = &mut p2;
+                    let writer = process2.input();
+                    writer.write_str(output);
+                }
+                p2.close_input();
+                p2.close_outputs();
+                p2.finish();
+            },
+            None            => { println!("Something went wrong with {}", prog2);}
+        }
+	//});
+
+    }
+
+
+
+
+
 }
 
 fn get_cmdline_from_args() -> Option<~str> {
