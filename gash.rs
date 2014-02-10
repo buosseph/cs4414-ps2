@@ -111,6 +111,11 @@ impl Shell {
                         }
                     }
                 }
+                else if argv_bkgd.contains(&~"|"){
+                    let mut args = argv.to_owned();
+                    args.insert(0, program.to_owned());
+                    self.check_for_pipes(args);
+                }
                 else {
                     let process = Process::new(program, argv_bkgd, ProcessOptions{
                         env: None,
@@ -130,10 +135,25 @@ impl Shell {
                 }
 
             } else {
+
+
+
+
+
                 let background = false;
                 if argv.contains(&~">"){
                     for i in range(0, argv.len()){
                         if argv[i] == ~">" {
+                            let mut file = argv[i+1].to_owned();
+                            let last_char = file.pop_char();
+                            if last_char == ';' {
+                                self.redirect_right(program, argv.slice(0, i), file, background);
+                                let program = argv[i+2].to_owned();
+                                let args = argv.slice(i+3, argv.len());
+                                self.run_cmd(program, args);
+                                break;
+                            }
+                            argv[i+1].to_owned().push_char(last_char);
                             self.redirect_right(program, argv.slice(0, i), argv[i+1], background);
                             break;
                         }
@@ -153,7 +173,6 @@ impl Shell {
                     self.check_for_pipes(args);
                 }
                 else {
-                    // No pipe or redirect
                     run::process_status(program, argv);
                 }
                 
@@ -170,6 +189,7 @@ impl Shell {
         return ret.expect("exit code error.").status.success();
     }
 
+
     fn check_for_pipes(&mut self, cmd_argv: &[~str]){
         for i in range(0, cmd_argv.len()){
             if cmd_argv[i] == ~"|" {
@@ -177,15 +197,68 @@ impl Shell {
             }
         }      
     }
+    
+    // fn check_for_pipes(&mut self, cmd_argv: &[~str]){
+
+    //     // let mut channels: ~[std::os::Pipe] = ~[];
+    //     // for _ in range(0, progs.len()) {
+    //     //   channels.push(std::os::pipe());
+    //     // }
+    //     // let mut prog: [&[~str]];
+    //     // let mut last = 0;
+    //     // for i in range(0, cmd_argv.len()){
+    //     //     if cmd_argv[i] == ~"|" {
+    //     //         prog.pus(cmd_argv.slice(last, i));
+    //     //         last = i+1;
+    //     //         //self.pipe(cmd_argv[0], cmd_argv.slice(1, i), cmd_argv[i+1], cmd_argv.slice(i+2, cmd_argv.len()));
+    //     //     }
+    //     // }
+
+    //     // let mut out;
+    //     // let mut into;
+    //     // for i in range(0, prog.len()) {
+    //     //     if i == 0 {
+    //     //         out = 
+    //     //     }
+
+    //     //     if i == prog.len()-1 {
+    //     //         program = prog[i].remove(0);
+    //     //         args = prog[i];
+    //     //         let fp = Process::new(program, args, ProcessOptions{
+    //     //             env: None,
+    //     //             dir: None,
+    //     //             in_fd: Some(prog.len()-1),
+    //     //             out_fd: Some(prog.len()),
+    //     //             err_fd: None
+    //     //         });
+    //     //         fp.unwrap().finish();
+    //     //     }
+    //     //     else {
+    //     //         spwan(proc() {
+    //     //             program = prog[i].remove(0);
+    //     //             args = prog[i];
+    //     //             let fp = Process::new(program, args, ProcessOptions{
+    //     //                 env: None,
+    //     //                 dir: None,
+    //     //                 in_fd: Some(0),
+    //     //                 out_fd: Some(1),
+    //     //                 err_fd: Some(2)
+    //     //             });
+    //     //             fp.unwrap().finish();
+    //     //         });
+    //     //     }
+    //     // }
+
+
+    // }
 
     // Functional, but not correctly
     fn redirect_right(&mut self, program: &str, argv: &[~str], write_to_file: &str, background: bool){
-        
+
 
         if background {
             let path = &Path::new(write_to_file.clone());
             let mut output_file = File::create(path).unwrap();
-            println!("Created output file {}", write_to_file);   
             let process = Process::new(program, argv, ProcessOptions::new());
 
             let (port, chan): (Port<~str>, Chan<~str>) = Chan::new();
@@ -212,8 +285,7 @@ impl Shell {
             output_file.write_str(output);
         } else {
             let path = &Path::new(write_to_file.clone());
-            let mut output_file = File::create(path).unwrap();
-            println!("Created output file {}", write_to_file);   
+            let mut output_file = File::create(path).unwrap();   
 
             // Works now, but requires interrupt signal to 
             // be sent twice to return to gash
@@ -242,14 +314,12 @@ impl Shell {
         }
         else {
             let path = &Path::new(read_from_file.clone());
-
             if !path.is_file() {
                 println!("There doesn't seem to be any file called {}", read_from_file);
             }
             else {
                 let mut input_file = File::open(path);
                 let input = input_file.read_to_end();
-                println!("Starting process");
                 match Process::new(program, argv, ProcessOptions{
                     env: None,
                     dir: None,
@@ -278,58 +348,125 @@ impl Shell {
 
 
     fn pipe(&mut self, prog1: &str, prog1_args: &[~str], prog2: &str, prog2_args: &[~str]){
+        //let mut output: ~str = ~"";
 
-        let process1 = Process::new(prog1, prog1_args, ProcessOptions{
+        println!("Prog1: {}", prog1 );
+        for i in range(0, prog1_args.len()){
+            print!("\t{}", prog1_args[i]);
+        }
+        println!("\n");
+
+        println!("Prog2: {}", prog2 );
+        for i in range(0, prog2_args.len()){
+            print!("\t{}", prog2_args[i]);
+        }
+        println!("\n");
+
+     let (port, chan): (Port<~str>, Chan<~str>) = Chan::new();
+
+    //spawn(proc() {
+        match Process::new(prog2, prog2_args, ProcessOptions{
             env: None,
             dir: None,
             in_fd: Some(0),
             out_fd: None,
             err_fd: Some(2)
-        });
-        let (port1, chan1): (Port<~str>, Chan<~str>) = Chan::new();
+        }){
+            Some(mut p2)    => {
+        let process = Process::new(prog1, prog1_args, ProcessOptions{
+                        env: None,
+                    dir: None,
+                    in_fd: None,
+                        out_fd: Some(1),
+                        err_fd: Some(2)
+                    });
+
         spawn(proc() {
-            match process1 {
-                Some(mut p1)    => {
-                    {
-                        let process1 = &mut p1;
-                        let output = process1.output().read_to_str();
-                        chan1.send(output);
-                    }
-                    p1.close_input();
-                    p1.close_outputs();
-                    p1.finish();
-                },
-                None            => { println!("Pipe Error!");}
-            }
+                match process{
+                    Some(mut p1)    => {
+                        {
+                            let process1 = &mut p1;
+                            let output = process1.output().read_to_str();
+                            //let process = &mut p;
+                            //let reader = process.output();
+                            //let output = reader.read_to_str();  //~str
+                            
+                            // Write to output file
+                            chan.send(output);
+                        }
+                        p1.close_input();
+                        p1.close_outputs();
+                        p1.finish();
+                    },
+                    None            => { ; }  //println!("Something went wrong with {}", prog1);}
+                }
         });
 
+                let output = port.recv();
 
-        let process2 = Process::new(prog2, prog2_args, ProcessOptions{
-            env: None,
-            dir: None,
-            in_fd: None,
-            out_fd: Some(1),
-            err_fd: Some(2)
-        });
- 
-        let (port2, chan2): (Port<~str>, Chan<~str>) = Chan::new();
-        spawn(proc() {
-            match process2 {
-                Some(mut p2)    => {
-                    {
-                        let process2 = &mut p2;
-                        let writer = process2.input();
-                        let input = port1.recv();
-                        writer.write_str(input);
-                    }
-                    p2.close_input();
-                    p2.close_outputs();
-                    p2.finish();
-                },
-                None            => { println!("Pipe Error!");}
-            }
-        });
+                {
+                    let process2 = &mut p2;
+                    let writer = process2.input();
+                    writer.write_str(output);
+                }
+                p2.close_input();
+                p2.close_outputs();
+                p2.finish();
+            },
+            None            => { println!("Something went wrong with {}", prog2);}
+        }
+    //});
+
     }
+
+    // fn pipe(&mut self, prog1: &str, prog1_args: &[~str], prog2: &str, prog2_args: &[~str]){
+
+
+    //     match Process::new(prog2, prog2_args, ProcessOptions{
+    //         env: None,
+    //         dir: None,
+    //         in_fd: None,
+    //         out_fd: Some(1),
+    //         err_fd: Some(2)
+    //     }){
+    //         Some(mut p2)    => {
+    //             let process1 = Process::new(prog1, prog1_args, ProcessOptions{
+    //                 env: None,
+    //                 dir: None,
+    //                 in_fd: Some(0),
+    //                 out_fd: None,
+    //                 err_fd: Some(2)
+    //             });
+    //             let (port, chan): (Port<~str>, Chan<~str>) = Chan::new();
+    //             spawn(proc() {
+    //                 match process1 {
+    //                     Some(mut p1)    => {
+    //                         {
+    //                             let process1 = &mut p1;
+    //                             let output = process1.output().read_to_str();
+    //                             chan.send(output);
+    //                         }
+    //                         p1.close_input();
+    //                         p1.close_outputs();
+    //                         p1.finish();
+    //                     },
+    //                     None            => { println!("Pipe Error!");}
+    //                 }
+    //             });
+
+    //             {
+    //                 let process2 = &mut p2;
+    //                 let writer = process2.input();
+    //                 let input = port.recv();
+    //                 writer.write_str(input);
+    //             }
+    //             p2.close_input();
+    //             p2.close_outputs();
+    //             p2.finish();
+    //         },
+    //         None            => { println!("Something went wrong with {}", prog2);}
+    //     }
+    // }
 
 }
 
